@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monte Carlo Trading Calculator</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.22.9/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background-color: #1a1a1a; color: #e5e7eb; font-family: Arial, sans-serif; }
+    input, select { background-color: #2d2d2d; color: #e5e7eb; border: 1px solid #4b5563; }
+    input:focus, select:focus { outline: none; border-color: #3b82f6; }
+    .error { color: #ef4444; font-size: 0.875rem; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const MonteCarloCalculator = () => {
+      // State for inputs
+      const [inputs, setInputs] = useState({
+        initialBalance: 10000,
+        riskPerTrade: 1,
+        winRate: 50,
+        tradesPerMonth: 20,
+        totalMonths: 12,
+        riskRewardRatio: 2,
+      });
+
+      // State for results
+      const [results, setResults] = useState({
+        mostProbable: 0,
+        bestCase: 0,
+        worstCase: 0,
+      });
+
+      // State for chart data
+      const [chartData, setChartData] = useState({
+        mostProbable: [],
+        best: [],
+        worst: [],
+      });
+
+      // State for selected chart scenario
+      const [selectedScenario, setSelectedScenario] = useState('mostProbable');
+
+      // State for input errors
+      const [errors, setErrors] = useState({});
+
+      // Chart reference
+      const chartRef = useRef(null);
+      const chartInstanceRef = useRef(null);
+
+      // Validate inputs
+      const validateInputs = (inputs) => {
+        const errors = {};
+        if (inputs.initialBalance <= 0) errors.initialBalance = 'Must be positive';
+        if (inputs.riskPerTrade <= 0 || inputs.riskPerTrade > 100) errors.riskPerTrade = 'Must be 0-100%';
+        if (inputs.winRate < 0 || inputs.winRate > 100) errors.winRate = 'Must be 0-100%';
+        if (inputs.tradesPerMonth <= 0) errors.tradesPerMonth = 'Must be positive';
+        if (inputs.totalMonths <= 0) errors.totalMonths = 'Must be positive';
+        if (inputs.riskRewardRatio <= 0) errors.riskRewardRatio = 'Must be positive';
+        return errors;
+      };
+
+      // Run Monte Carlo simulation
+      const runSimulation = () => {
+        const errors = validateInputs(inputs);
+        setErrors(errors);
+        if (Object.keys(errors).length > 0) {
+          setResults({ mostProbable: 0, bestCase: 0, worstCase: 0 });
+          setChartData({ mostProbable: [], best: [], worst: [] });
+          return;
+        }
+
+        const {
+          initialBalance,
+          riskPerTrade,
+          winRate,
+          tradesPerMonth,
+          totalMonths,
+          riskRewardRatio,
+        } = inputs;
+
+        const numSimulations = 10000;
+        const totalTrades = tradesPerMonth * totalMonths;
+        const simulations = [];
+        const equityCurves = [];
+
+        // Run simulations
+        for (let i = 0; i < numSimulations; i++) {
+          let balance = initialBalance;
+          const curve = [balance];
+
+          for (let j = 0; j < totalTrades; j++) {
+            const isWin = Math.random() * 100 < winRate;
+            const riskAmount = balance * (riskPerTrade / 100);
+            if (isWin) {
+              balance += riskAmount * riskRewardRatio;
+            } else {
+              balance -= riskAmount;
+            }
+            if (balance <= 0) balance = 0;
+            if ((j + 1) % tradesPerMonth === 0) curve.push(balance);
+          }
+
+          simulations.push(balance);
+          equityCurves.push(curve);
+        }
+
+        // Sort simulations to find percentiles
+        simulations.sort((a, b) => a - b);
+        const mostProbable = simulations[Math.floor(numSimulations / 2)];
+        const bestCase = simulations[Math.floor(numSimulations * 0.95)];
+        const worstCase = simulations[Math.floor(numSimulations * 0.05)];
+
+        // Find representative equity curves
+        const findClosestCurve = (target) => {
+          let closestIdx = 0;
+          let minDiff = Math.abs(equityCurves[0][equityCurves[0].length - 1] - target);
+          for (let i = 1; i < equityCurves.length; i++) {
+            const diff = Math.abs(equityCurves[i][equityCurves[i].length - 1] - target);
+            if (diff < minDiff) {
+              minDiff = diff;
+              closestIdx = i;
+            }
+          }
+          return equityCurves[closestIdx];
+        };
+
+        setResults({
+          mostProbable: mostProbable.toFixed(2),
+          bestCase: bestCase.toFixed(2),
+          worstCase: worstCase.toFixed(2),
+        });
+
+        setChartData({
+          mostProbable: findClosestCurve(mostProbable),
+          best: findClosestCurve(bestCase),
+          worst: findClosestCurve(worstCase),
+        });
+      };
+
+      // Debounce simulation to prevent excessive runs
+      useEffect(() => {
+        const handler = setTimeout(() => {
+          runSimulation();
+        }, 500);
+        return () => clearTimeout(handler);
+      }, [inputs]);
+
+      // Initialize and update chart
+      useEffect(() => {
+        if (chartData.mostProbable.length === 0) return;
+
+        const ctx = chartRef.current.getContext('2d');
+        if (chartInstanceRef.current) {
+          chartInstanceRef.current.destroy();
+        }
+
+        chartInstanceRef.current = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: Array.from({ length: chartData.mostProbable.length }, (_, i) => i),
+            datasets: [{
+              label: selectedScenario.charAt(0).toUpperCase() + selectedScenario.slice(1) + ' Scenario',
+              data: chartData[selectedScenario],
+              borderColor: selectedScenario === 'mostProbable' ? '#3b82f6' : selectedScenario === 'best' ? '#22c55e' : '#ef4444',
+              fill: false,
+            }],
+          },
+          options: {
+            responsive: true,
+            scales: {
+              x: { title: { display: true, text: 'Months', color: '#e5e7eb' }, ticks: { color: '#e5e7eb' } },
+              y: { title: { display: true, text: 'Balance ($)', color: '#e5e7eb' }, ticks: { color: '#e5e7eb' } },
+            },
+            plugins: {
+              legend: { labels: { color: '#e5e7eb' } },
+            },
+          },
+        });
+
+        return () => {
+          if (chartInstanceRef.current) {
+            chartInstanceRef.current.destroy();
+          }
+        };
+      }, [chartData, selectedScenario]);
+
+      // Handle input changes
+      const handleInputChange = (e) => {
+        const { name, value } = e.target;
+        setInputs((prev) => ({
+          ...prev,
+          [name]: parseFloat(value) || 0,
+        }));
+      };
+
+      return (
+        <div className="max-w-4xl mx-auto p-6">
+          <h1 className="text-2xl font-bold mb-6 text-center">Monte Carlo Trading Calculator</h1>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Input Fields */}
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium">Initial Balance ($)</label>
+                <input
+                  type="number"
+                  name="initialBalance"
+                  value={inputs.initialBalance}
+                  onChange={handleInputChange}
+                  className="w-full p-2 rounded"
+                />
+                {errors.initialBalance && <p className="error">{errors.initialBalance}</p>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Risk per Trade (%)</label>
+                <input
+                  type="number"
+                  name="riskPerTrade"
+                  value={inputs.riskPerTrade}
+                  onChange={handleInputChange}
+                  className="w-full p-2 rounded"
+                />
+                {errors.riskPerTrade && <p className="error">{errors.riskPerTrade}</p>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Win Rate (%)</label>
+                <input
+                  type="number"
+                  name="winRate"
+                  value={inputs.winRate}
+                  onChange={handleInputChange}
+                  className="w-full p-2 rounded"
+                />
+                {errors.winRate && <p className="error">{errors.winRate}</p>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Trades per Month</label>
+                <input
+                  type="number"
+                  name="tradesPerMonth"
+                  value={inputs.tradesPerMonth}
+                  onChange={handleInputChange}
+                  className="w-full p-2 rounded"
+                />
+                {errors.tradesPerMonth && <p className="error">{errors.tradesPerMonth}</p>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Total Months</label>
+                <input
+                  type="number"
+                  name="totalMonths"
+                  value={inputs.totalMonths}
+                  onChange={handleInputChange}
+                  className="w-full p-2 rounded"
+                />
+                {errors.totalMonths && <p className="error">{errors.totalMonths}</p>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium">Risk-Reward Ratio</label>
+                <input
+                  type="number"
+                  name="riskRewardRatio"
+                  value={inputs.riskRewardRatio}
+                  onChange={handleInputChange}
+                  className="w-full p-2 rounded"
+                />
+                {errors.riskRewardRatio && <p className="error">{errors.riskRewardRatio}</p>}
+              </div>
+            </div>
+            {/* Results and Chart */}
+            <div>
+              <div className="mb-6">
+                <h2 className="text-xl font-semibold mb-2">Results</h2>
+                <p>Most Probable: ${results.mostProbable}</p>
+                <p>Best Case: ${results.bestCase}</p>
+                <p>Worst Case: ${results.worstCase}</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">Select Scenario</label>
+                <select
+                  value={selectedScenario}
+                  onChange={(e) => setSelectedScenario(e.target.value)}
+                  className="w-full p-2 rounded mb-4"
+                >
+                  <option value="mostProbable">Most Probable</option>
+                  <option value="best">Best Case</option>
+                  <option value="worst">Worst Case</option>
+                </select>
+                <canvas ref={chartRef}></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    ReactDOM.render(<MonteCarloCalculator />, document.getElementById('root'));
+  </script>
+</body>
+</html>
